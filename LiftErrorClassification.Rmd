@@ -1,0 +1,147 @@
+---
+title: "Weight Lifting Error Classification"
+author: "Ben Daniel"
+date: "October 24, 2015"
+output: html_document
+---
+#Summary
+
+As stated in the assingment, body movement montiors have now become very cheap, and they allow us to collect vast amounts of data about our body's movements.  The data set given in this assignment from (Human Activity Recognition , http://groupware.les.inf.puc-rio.br/har ) tracks the lifting of a dumbell.  Dumbell lifts that are done incorrectly are classified and features about the lift are documented.
+
+#Data
+The training data for this assignment came from the Human Activity Recognition https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv. The model was tested with the following set https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv.  As the demonstrated in the code below, these CSV files were downloaded from their respective websites into R's working directory for this project.
+
+#Selecting Data
+In the code below, data is read into a dataframe.  A subset of columns for uncalcualted variables are selected from the overall dataset.
+```{r echo=TRUE}
+library(caret)
+library(rattle)
+library(dplyr)
+library(rpart)
+library(randomForest)
+rawmotionDat <- read.csv("data/pml-training.csv")
+
+#get rid of unncessary variables, only pick the variables with raw,yaw,or pitch
+#throw out anyting with lots of NAs
+
+motionDat<- rawmotionDat %>% 
+        select(one_of(c("roll_belt","pitch_belt","yaw_belt",
+                        "total_accel_belt","gyros_belt_x","gyros_belt_y","gyros_belt_z",
+                        "accel_belt_x","accel_belt_y","accel_belt_z","magnet_belt_x",
+                        "magnet_belt_y","magnet_belt_z","roll_arm","pitch_arm","yaw_arm",
+                        "total_accel_arm","gyros_arm_x","gyros_arm_y","gyros_arm_z",
+                        "accel_arm_x","accel_arm_y","accel_arm_z","magnet_arm_x",
+                        "magnet_arm_y","magnet_arm_z","roll_dumbbell","pitch_dumbbell",
+                        "yaw_dumbbell","total_accel_dumbbell","gyros_dumbbell_x",
+                        "gyros_dumbbell_y","gyros_dumbbell_z","accel_dumbbell_x",
+                        "accel_dumbbell_y","accel_dumbbell_z","magnet_dumbbell_x",
+                        "magnet_dumbbell_y","magnet_dumbbell_z","roll_forearm","pitch_forearm",
+                        "yaw_forearm","gyros_forearm_x","gyros_forearm_y","gyros_forearm_z",
+                        "accel_forearm_x","accel_forearm_y","accel_forearm_z",
+                        "magnet_forearm_x","magnet_forearm_y","magnet_forearm_z","classe")))
+```
+The training data set was quite large (19K records).  I subsetted it by a 60-20-20 ratio into  training, validation, and test sets.  Cross validation was done via a correlation matrix.
+```{r, echo=TRUE}
+#create a validation data set from the training set
+#60% training, 20% validation, 20% test
+#subsample with caret
+# 
+# Cross-validation
+# Approach:
+#         
+# Use the training set
+#         Split it into training/test sets
+#         Build a model on the training setr
+#         Evaluate on the test set
+#         Repeat and average the estimated errors
+# 
+# Used for:
+#         
+#         Picking variables to include in a model
+#         Picking the type of prediction function to use
+#         Picking the parameters in the prediction function
+#         Comparing different predictors
+
+       inTrain <- createDataPartition(y=motionDat$classe,p=.6,list=FALSE)
+       training <- motionDat[inTrain,]
+       nottrain <- motionDat[-inTrain,]
+       
+       M<-abs(cor(training [,1:51]))
+       diag(M)<-0
+       newM<-which(M > .8, arr.ind=T) #get the variables whose correlation is > .8
+       important_vars<-as.data.frame(rownames(newM))%>%distinct()
+       important_vars_n<-c(as.character(important_vars[,1]),"classe") #append the classifier (output) var
+       #the training set was resubsetted by selecteing imprant columns
+       training<-select(training,one_of(important_vars_n))
+       nottrain <- select(nottrain,one_of(important_vars_n))
+       
+#in the above example, we held out 60% for the training, thus notrain is 40%, since the 
+#recommendation for sizes of validation and test set data is 20% of the original, I will 
+#split this part in half
+
+       v_and_t<- createDataPartition(y=nottrain$classe,p=.5,list=FALSE)
+       validation <- nottrain[v_and_t,]
+       pretest <- nottrain[-v_and_t,]
+```
+
+#Model Construction
+I compared two model types: the first was rpart, and the second was random forest.
+The next code sample demonstrates building both types of models.  Note that the prediction is done with the validation dataset; data is training for each respective modFit variable, and it is validation for each pred variable.
+```{r echo=TRUE}
+       #since this is a classification problem, I am going to choose the rpart model and start a tree.
+#model, at first.  I may try a model with random forests or boosting as well.
+modFitTree <- train(classe ~ ., method="rpart",data=training)
+predTree <- predict(modFitTree,newdata=validation)
+
+#let's try random forrest model
+modFitRF <- randomForest(classe ~ ., method="rf",data=training,prox=TRUE,importance=TRUE)
+#much better accuracy, but let's try with validation
+predRF <- predict(modFitRF,newdata=validation)
+```
+
+#Results
+Using the confusion matrix, we are able to observe the output of each type of model
+
+The RPart Model
+```{r confusion matrix rpart, echo=TRUE}
+cfTree<-confusionMatrix(validation$classe,predict(modFitTree,newdata=validation))
+print(cfTree)
+```
+As shown in the figure above, the cfTree only provides about 50% accuracy.
+
+
+The Random Forest Model
+```{r confusion matrix random forest, echo=TRUE}
+cfRM<-confusionMatrix(validation$classe,predRF)
+print(cfRM)
+```
+
+The random forest model is much more accurate because of its resampling methods.
+
+The following figure compares the two confusion matrices.  (sample code adapted from http://oobaloo.co.uk/visualising-classifier-results-with-ggplot2)
+
+```{r confusion_matrix_plot, echo=FALSE  }
+library(ggplot2)
+
+cfPlotTree <- as.data.frame(as.table(cfTree$table))
+plot1 <- ggplot(cfPlotTree)
+plot1 + geom_tile(aes(x=Prediction, y=Reference, fill=Freq)) + 
+        scale_x_discrete(name="Actual Class") + 
+        scale_y_discrete(name="Predicted Class") + 
+        scale_fill_gradient(breaks=seq(from=-0, to=1, by=.2)) + 
+        labs(fill="Normalized\nFrequency") +
+        ggtitle("Confusion Matrix Plot for RPart Model")
+
+cfPlotRM <- as.data.frame(as.table(cfRM$table))
+plot2 <- ggplot(cfPlotRM)
+plot2 + geom_tile(aes(x=Prediction, y=Reference, fill=Freq)) + 
+        scale_x_discrete(name="Actual Class") + 
+        scale_y_discrete(name="Predicted Class") + 
+        scale_fill_gradient(breaks=seq(from=-0, to=1, by=.2)) + 
+        labs(fill="Normalized\nFrequency") +
+        ggtitle("Confusion Matrix Plot for Random Forest Model")
+
+```
+
+
+Notice that the diagnonal (a correct prediction) is much stronger in the second graph compared to the first graph.
